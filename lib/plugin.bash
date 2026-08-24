@@ -44,13 +44,12 @@ plugin_api_request() {
     --request "$method" --output "$body_file" --write-out '%{http_code}'
     --header 'Accept: application/vnd.github+json'
     --header 'X-GitHub-Api-Version: 2022-11-28'
-    --header 'User-Agent: create-github-app-token-buildkite-plugin'
-    --header "Authorization: Bearer ${auth}")
+    --header 'User-Agent: create-github-app-token-buildkite-plugin')
   if [[ -n "$payload" ]]; then
     args+=(--header 'Content-Type: application/json' --data "$payload")
   fi
 
-  status="$(curl "${args[@]}" "${GITHUB_APP_API_URL}${path}")" || {
+  status="$(printf 'header = "Authorization: Bearer %s"\n' "$auth" | curl --config - "${args[@]}" "${GITHUB_APP_API_URL}${path}")" || {
     GITHUB_APP_HTTP_STATUS=unknown
     GITHUB_APP_HTTP_MESSAGE='GitHub API request failed'
     plugin_fail "GitHub API request failed for ${method} ${path}"
@@ -131,8 +130,12 @@ plugin_target() {
     requested=("${current#*/}")
   fi
   if ((${#requested[@]} > 0)) && [[ -z "$configured_owner" ]]; then
-    current="$(plugin_current_repository)" || return
-    configured_owner="${current%%/*}"
+    if [[ "${requested[0]}" == */* ]]; then
+      configured_owner="${requested[0]%%/*}"
+    else
+      current="$(plugin_current_repository)" || return
+      configured_owner="${current%%/*}"
+    fi
   fi
 
   GITHUB_APP_OWNER="$configured_owner"
@@ -171,8 +174,8 @@ plugin_permissions_json() {
       plugin_fail "invalid permission name: ${key}"
       return 1
     }
-    [[ "$value" == read || "$value" == write ]] || {
-      plugin_fail "permission ${key} must be read or write"
+    [[ "$value" == read || "$value" == write || "$value" == admin ]] || {
+      plugin_fail "permission ${key} must be read, write, or admin"
       return 1
     }
     result="$(jq -cn --argjson current "$result" --arg key "$key" --arg value "$value" '$current + {($key):$value}')"
@@ -191,6 +194,10 @@ plugin_discover_installation() {
   else
     path="/orgs/${GITHUB_APP_OWNER}/installation"
     if ! plugin_api_request GET "$path" "$jwt" "$response" 200; then
+      if [[ "$GITHUB_APP_HTTP_STATUS" != 404 ]]; then
+        plugin_fail "could not find a GitHub App installation for owner ${GITHUB_APP_OWNER} (HTTP ${GITHUB_APP_HTTP_STATUS}: ${GITHUB_APP_HTTP_MESSAGE})"
+        return 1
+      fi
       path="/users/${GITHUB_APP_OWNER}/installation"
       plugin_api_request GET "$path" "$jwt" "$response" 200 || {
         plugin_fail "could not find a GitHub App installation for owner ${GITHUB_APP_OWNER} (HTTP ${GITHUB_APP_HTTP_STATUS}: ${GITHUB_APP_HTTP_MESSAGE})"
@@ -217,8 +224,8 @@ github_app_token_create() {
     client_id="$(plugin_indirect_value "$app_id_env" app-id-env)" || return
   fi
   [[ -n "$client_id" ]] || client_id="$(plugin_config app-id)"
-  [[ "$client_id" =~ ^(Iv1\.[A-Fa-f0-9]+|[0-9]+)$ ]] || {
-    plugin_fail 'client-id/app-id is missing or malformed'
+  [[ -n "$client_id" ]] || {
+    plugin_fail 'client-id or app-id is required'
     return 1
   }
 

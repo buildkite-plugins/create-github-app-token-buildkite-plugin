@@ -60,7 +60,7 @@ configuration:
       type: object
       description: GitHub installation token permissions, such as contents or pull_requests
       additionalProperties:
-        enum: [read, write]
+        enum: [read, write, admin]
     skip-revoke:
       type: boolean
       default: false

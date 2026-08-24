@@ -31,6 +31,7 @@ unset_plugin_options() {
   unset BUILDKITE_PLUGIN_CREATE_GITHUB_APP_TOKEN_OWNER
   unset BUILDKITE_PLUGIN_CREATE_GITHUB_APP_TOKEN_PERMISSIONS_CONTENTS
   unset BUILDKITE_PLUGIN_CREATE_GITHUB_APP_TOKEN_PERMISSIONS_PULL_REQUESTS
+  unset BUILDKITE_PLUGIN_CREATE_GITHUB_APP_TOKEN_PERMISSIONS_REPOSITORY_PROJECTS
   unset BUILDKITE_PLUGIN_CREATE_GITHUB_APP_TOKEN_PRIVATE_KEY_SECRET
   unset BUILDKITE_PLUGIN_CREATE_GITHUB_APP_TOKEN_REPOSITORIES
   unset BUILDKITE_PLUGIN_CREATE_GITHUB_APP_TOKEN_REPOSITORIES_0
@@ -56,7 +57,9 @@ MOCK
 set -euo pipefail
 method=GET output= payload= url=
 while (($#)); do
+  [[ "$1" != *Bearer* ]] || exit 9
   case "$1" in
+    --config) shift 2 ;;
     --request) method="$2"; shift 2 ;;
     --output) output="$2"; shift 2 ;;
     --data) payload="$2"; shift 2 ;;
@@ -110,9 +113,23 @@ create_token() {
   export BUILDKITE_PLUGIN_CREATE_GITHUB_APP_TOKEN_REPOSITORIES_1=web
   export BUILDKITE_PLUGIN_CREATE_GITHUB_APP_TOKEN_PERMISSIONS_CONTENTS=read
   export BUILDKITE_PLUGIN_CREATE_GITHUB_APP_TOKEN_PERMISSIONS_PULL_REQUESTS=write
+  export BUILDKITE_PLUGIN_CREATE_GITHUB_APP_TOKEN_PERMISSIONS_REPOSITORY_PROJECTS=admin
   create_token
   payload="$(awk '/access_tokens/{sub(/^.*access_tokens /, ""); print}' "$MOCK_LOG")"
-  jq -e '.repositories == ["api","web"] and .permissions == {contents:"read",pull_requests:"write"}' <<<"$payload"
+  jq -e '.repositories == ["api","web"] and .permissions == {contents:"read",pull_requests:"write",repository_projects:"admin"}' <<<"$payload"
+}
+
+@test "derives owner from a qualified repository without BUILDKITE_REPO" {
+  unset BUILDKITE_REPO
+  export BUILDKITE_PLUGIN_CREATE_GITHUB_APP_TOKEN_REPOSITORIES='acme/api'
+  create_token
+  grep -F 'GET https://api.github.com/repos/acme/api/installation' "$MOCK_LOG"
+}
+
+@test "accepts modern opaque GitHub App client IDs" {
+  export BUILDKITE_PLUGIN_CREATE_GITHUB_APP_TOKEN_CLIENT_ID=Iv23f8doAlphaNumer1c
+  create_token
+  [[ "$GITHUB_TOKEN" == ghs_test_token ]]
 }
 
 @test "exports a custom output variable and registers redaction first" {
@@ -181,6 +198,16 @@ create_token() {
   [[ "$status" -ne 0 ]]
   [[ "$output" == *'HTTP 404: Not Found'* ]]
   [[ "$output" != *'must-not-leak'* ]]
+}
+
+@test "does not retry user discovery after an organization API failure" {
+  export BUILDKITE_PLUGIN_CREATE_GITHUB_APP_TOKEN_OWNER=acme
+  export MOCK_DISCOVERY_STATUS=500
+  run create_token
+  [[ "$status" -ne 0 ]]
+  [[ "$output" == *'HTTP 500: Not Found'* ]]
+  [[ "$(grep -c '/installation' "$MOCK_LOG")" -eq 1 ]]
+  grep -F '/orgs/acme/installation' "$MOCK_LOG"
 }
 
 @test "reports sanitized token API failures" {

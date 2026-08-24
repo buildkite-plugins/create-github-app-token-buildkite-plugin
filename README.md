@@ -72,7 +72,7 @@ Without `owner` or `repositories`, the owner and repository are derived from `BU
 
 ### Token options
 
-- **`permissions`**: Map of GitHub permission names to `read` or `write`. Omitted permissions cannot exceed the App installation's grants. If omitted, GitHub uses the installation's granted permissions.
+- **`permissions`**: Map of GitHub permission names to `read`, `write`, or `admin` where GitHub supports that level. Omitted permissions cannot exceed the App installation's grants. If omitted, GitHub uses the installation's granted permissions.
 - **`github-api-url`**: HTTPS API root. Defaults to `https://api.github.com`; for GHES this is usually `https://github.example.com/api/v3`.
 - **`output-variable`**: Exported variable name. Defaults to `GITHUB_TOKEN`.
 - **`skip-revoke`**: Keep the token valid until GitHub expires it (normally one hour). Defaults to `false`.
