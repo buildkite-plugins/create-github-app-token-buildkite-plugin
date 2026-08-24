@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+PLUGIN_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=lib/plugin.bash
+source "${PLUGIN_ROOT}/lib/plugin.bash"
+
+github_app_token_create
