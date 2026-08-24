@@ -7,6 +7,7 @@ setup() {
   mkdir -p "$TMPDIR" "$TEST_TMPDIR/bin"
   openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out "$TEST_TMPDIR/key.pem" 2>/dev/null
   export TEST_PRIVATE_KEY="$(cat "$TEST_TMPDIR/key.pem")"
+  export TEST_REAL_CAT="$(command -v cat)"
   export TEST_REAL_MKTEMP="$(command -v mktemp)"
   export PATH="$TEST_TMPDIR/bin:$PATH"
   export BUILDKITE_REPO="git@github.com:acme/widgets.git"
@@ -218,7 +219,16 @@ create_token() {
 @test "unreadable state does not make cleanup fatal" {
   create_token
   state="$BUILDKITE_PLUGIN_CREATE_GITHUB_APP_TOKEN_STATE_DIR"
-  chmod 000 "$state/token"
+  export MOCK_UNREADABLE_STATE="$state/token"
+  cat >"$TEST_TMPDIR/bin/cat" <<'MOCK'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "$MOCK_UNREADABLE_STATE" ]]; then
+  exit 1
+fi
+exec "$TEST_REAL_CAT" "$@"
+MOCK
+  chmod +x "$TEST_TMPDIR/bin/cat"
+  hash -r
   run github_app_token_cleanup
   [[ "$status" -eq 0 ]]
   [[ "$output" == *'failed to read token state; revocation was not attempted'* ]]
@@ -273,10 +283,7 @@ MOCK
   cat >"$TEST_TMPDIR/bin/mktemp" <<'MOCK'
 #!/usr/bin/env bash
 if [[ "${1:-}" == -d ]]; then
-  state="$TMPDIR/github-app-token-state.unwritable"
-  mkdir "$state"
-  chmod 500 "$state"
-  printf '%s\n' "$state"
+  printf '%s\n' /proc/github-app-token-state.unwritable
 else
   exec "$TEST_REAL_MKTEMP" "$@"
 fi
