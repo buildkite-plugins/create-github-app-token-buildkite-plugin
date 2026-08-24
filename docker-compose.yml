@@ -1,0 +1,18 @@
+services:
+  tests:
+    build:
+      context: .
+      dockerfile: Dockerfile.tests
+    volumes:
+      - .:/plugin:ro
+  shellcheck:
+    image: koalaman/shellcheck-alpine:stable
+    command: [hooks/pre-command, hooks/pre-exit, lib/plugin.bash]
+    working_dir: /plugin
+    volumes:
+      - .:/plugin:ro
+  lint:
+    image: buildkite/plugin-linter
+    command: [--id, buildkite-plugins/create-github-app-token]
+    volumes:
+      - .:/plugin:ro

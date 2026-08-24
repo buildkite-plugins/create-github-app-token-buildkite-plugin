@@ -1,0 +1,76 @@
+name: Create GitHub App Token
+description: Creates a short-lived, least-privilege GitHub App installation access token
+author: https://github.com/buildkite-plugins
+requirements:
+  - bash
+  - buildkite-agent
+  - curl
+  - jq
+  - openssl
+configuration:
+  properties:
+    client-id:
+      type: string
+      description: GitHub App client ID (preferred JWT issuer)
+    client-id-env:
+      type: string
+      pattern: "^[A-Za-z_][A-Za-z0-9_]*$"
+      description: Environment variable containing the GitHub App client ID
+    app-id:
+      type: string
+      description: GitHub App ID (compatibility alias for client-id)
+    app-id-env:
+      type: string
+      pattern: "^[A-Za-z_][A-Za-z0-9_]*$"
+      description: Environment variable containing the GitHub App ID
+    private-key-env:
+      type: string
+      pattern: "^[A-Za-z_][A-Za-z0-9_]*$"
+      description: Environment variable containing the GitHub App private key
+    private-key-secret:
+      type: string
+      pattern: "^[A-Za-z0-9_]+$"
+      description: Buildkite Secret key containing the GitHub App private key
+    owner:
+      type: string
+      pattern: "^[A-Za-z0-9-]+$"
+    repositories:
+      oneOf:
+        - type: string
+        - type: array
+          items:
+            type: string
+            minLength: 1
+          maxItems: 500
+    installation-id:
+      type: string
+      pattern: "^[0-9]+$"
+    installation-id-env:
+      type: string
+      pattern: "^[A-Za-z_][A-Za-z0-9_]*$"
+    github-api-url:
+      type: string
+      pattern: "^https://[^?#\\s]+/?$"
+      default: https://api.github.com
+    output-variable:
+      type: string
+      pattern: "^[A-Za-z_][A-Za-z0-9_]*$"
+      default: GITHUB_TOKEN
+    permissions:
+      type: object
+      description: GitHub installation token permissions, such as contents or pull_requests
+      additionalProperties:
+        enum: [read, write, admin]
+    skip-revoke:
+      type: boolean
+      default: false
+  allOf:
+    - anyOf:
+        - required: [client-id]
+        - required: [client-id-env]
+        - required: [app-id]
+        - required: [app-id-env]
+    - oneOf:
+        - required: [private-key-env]
+        - required: [private-key-secret]
+  additionalProperties: false

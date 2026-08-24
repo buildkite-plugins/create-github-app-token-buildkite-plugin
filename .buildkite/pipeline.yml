@@ -1,0 +1,15 @@
+steps:
+  - label: ":bash: Tests"
+    plugins:
+      - docker-compose#v5.14.0:
+          run: tests
+  - label: ":shell: Shellcheck"
+    plugins:
+      - shellcheck#v1.4.0:
+          files:
+            - hooks/*
+            - lib/*.bash
+  - label: ":sparkles: Plugin lint"
+    plugins:
+      - plugin-linter#v3.3.0:
+          id: buildkite-plugins/create-github-app-token
