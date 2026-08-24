@@ -14,6 +14,18 @@ plugin_config() {
   printf '%s' "${!variable:-$default}"
 }
 
+plugin_config_variables() {
+  local prefix="$1" variables sorted
+  shift
+  variables="$(compgen -A variable "$prefix" || true)"
+  [[ -n "$variables" ]] || return 0
+  sorted="$(sort "$@" <<<"$variables")" || {
+    plugin_fail 'failed to sort plugin configuration variables'
+    return 1
+  }
+  printf '%s' "$sorted"
+}
+
 plugin_indirect_value() {
   local reference="$1" description="$2"
   [[ "$reference" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || {
@@ -64,9 +76,19 @@ plugin_api_request() {
 
 plugin_create_jwt() (
   local issuer="$1" key="$2" now header claims signing_input key_file signature
-  now="$(date +%s)"
-  header="$(printf '%s' '{"alg":"RS256","typ":"JWT"}' | plugin_base64url)"
-  claims="$(jq -cn --arg iss "$issuer" --argjson iat "$((now - 60))" --argjson exp "$((now + 540))" '{iat:$iat,exp:$exp,iss:$iss}' | plugin_base64url)"
+  set -o pipefail
+  now="$(date +%s)" || {
+    plugin_fail 'failed to read system time'
+    return 1
+  }
+  header="$(printf '%s' '{"alg":"RS256","typ":"JWT"}' | plugin_base64url)" || {
+    plugin_fail 'failed to encode JWT header'
+    return 1
+  }
+  claims="$(jq -cn --arg iss "$issuer" --argjson iat "$((now - 60))" --argjson exp "$((now + 540))" '{iat:$iat,exp:$exp,iss:$iss}' | plugin_base64url)" || {
+    plugin_fail 'failed to encode JWT claims'
+    return 1
+  }
   signing_input="${header}.${claims}"
 
   key_file="$(mktemp "${TMPDIR:-/tmp}/github-app-key.XXXXXX")"
@@ -104,17 +126,20 @@ plugin_current_repository() {
 }
 
 plugin_collect_repositories() {
-  local scalar variable value
+  local scalar variable variables value
   GITHUB_APP_CONFIGURED_REPOSITORIES=()
   scalar="$(plugin_config repositories)"
   if [[ -n "$scalar" ]]; then
+    scalar="${scalar//,/$'\n'}"
     while IFS= read -r value; do
       [[ -n "$value" ]] && GITHUB_APP_CONFIGURED_REPOSITORIES+=("$value")
-    done < <(printf '%s\n' "$scalar" | tr ',' '\n')
+    done <<<"$scalar"
   fi
+  variables="$(plugin_config_variables "${PLUGIN_PREFIX}REPOSITORIES_" -t_ -k8,8n)" || return
   while IFS= read -r variable; do
+    [[ -n "$variable" ]] || continue
     GITHUB_APP_CONFIGURED_REPOSITORIES+=("${!variable}")
-  done < <(compgen -A variable "${PLUGIN_PREFIX}REPOSITORIES_" | sort -t_ -k8,8n)
+  done <<<"$variables"
   ((${#GITHUB_APP_CONFIGURED_REPOSITORIES[@]} <= 500)) || plugin_fail 'repositories cannot contain more than 500 entries'
 }
 
@@ -165,8 +190,10 @@ plugin_target() {
 }
 
 plugin_permissions_json() {
-  local variable key value result='{}'
+  local variable variables key value result='{}'
+  variables="$(plugin_config_variables "${PLUGIN_PREFIX}PERMISSIONS_")" || return
   while IFS= read -r variable; do
+    [[ -n "$variable" ]] || continue
     key="${variable#"${PLUGIN_PREFIX}"PERMISSIONS_}"
     key="$(printf '%s' "$key" | tr '[:upper:]' '[:lower:]')"
     value="${!variable}"
@@ -179,7 +206,7 @@ plugin_permissions_json() {
       return 1
     }
     result="$(jq -cn --argjson current "$result" --arg key "$key" --arg value "$value" '$current + {($key):$value}')"
-  done < <(compgen -A variable "${PLUGIN_PREFIX}PERMISSIONS_" | sort)
+  done <<<"$variables"
   printf '%s' "$result"
 }
 
@@ -311,7 +338,7 @@ github_app_token_create() {
     return 1
   }
 
-  buildkite-agent redactor add "$token" >/dev/null || {
+  printf '%s' "$token" | buildkite-agent redactor add >/dev/null || {
     plugin_api_request DELETE '/installation/token' "$token" "$response" 204 || true
     rm -f "$response"
     unset token
@@ -327,8 +354,14 @@ github_app_token_create() {
       plugin_fail 'could not create private token state directory'
       return 1
     }
-    printf '%s' "$token" >"${state_dir}/token"
-    printf '%s' "$GITHUB_APP_API_URL" >"${state_dir}/api-url"
+    if ! printf '%s' "$token" >"${state_dir}/token" || ! printf '%s' "$GITHUB_APP_API_URL" >"${state_dir}/api-url"; then
+      plugin_api_request DELETE '/installation/token' "$token" "$response" 204 || true
+      rm -f "$response"
+      rm -rf "$state_dir" || true
+      unset token
+      plugin_fail 'could not write private token state'
+      return 1
+    fi
     export BUILDKITE_PLUGIN_CREATE_GITHUB_APP_TOKEN_STATE_DIR="$state_dir"
   fi
   printf -v "$output_variable" '%s' "$token"
@@ -359,23 +392,31 @@ github_app_token_cleanup() {
   esac
   if [[ ! -d "$state_dir" || ! -f "$state_dir/token" || ! -f "$state_dir/api-url" ]]; then
     printf '%s\n' 'create-github-app-token: token state is missing; revocation was not attempted' >&2
-    rm -rf "$state_dir"
+    rm -rf "$state_dir" || printf '%s\n' 'create-github-app-token: warning: failed to remove token state' >&2
     unset BUILDKITE_PLUGIN_CREATE_GITHUB_APP_TOKEN_STATE_DIR
     [[ -n "$output_variable" ]] && unset "$output_variable"
     unset BUILDKITE_PLUGIN_CREATE_GITHUB_APP_TOKEN_OUTPUT_VARIABLE_NAME
     return 0
   fi
-  token="$(cat "${state_dir}/token")"
-  GITHUB_APP_API_URL="$(cat "${state_dir}/api-url")"
+  token="$(cat "${state_dir}/token")" || {
+    printf '%s\n' 'create-github-app-token: warning: failed to read token state; revocation was not attempted' >&2
+    token=''
+  }
+  GITHUB_APP_API_URL="$(cat "${state_dir}/api-url")" || {
+    printf '%s\n' 'create-github-app-token: warning: failed to read API URL state; revocation was not attempted' >&2
+    GITHUB_APP_API_URL=''
+  }
   response="${state_dir}/response"
-  if ! plugin_api_request DELETE '/installation/token' "$token" "$response" 204; then
+  if [[ -z "$token" || -z "$GITHUB_APP_API_URL" ]]; then
+    :
+  elif ! plugin_api_request DELETE '/installation/token' "$token" "$response" 204; then
     status="${GITHUB_APP_HTTP_STATUS:-unknown}"
     printf 'create-github-app-token: warning: token revocation failed (HTTP %s)\n' "$status" >&2
   else
     printf '%s\n' 'GitHub App installation token revoked'
   fi
   unset token
-  rm -rf "$state_dir"
+  rm -rf "$state_dir" || printf '%s\n' 'create-github-app-token: warning: failed to remove token state' >&2
   unset BUILDKITE_PLUGIN_CREATE_GITHUB_APP_TOKEN_STATE_DIR
   [[ -n "$output_variable" ]] && unset "$output_variable"
   unset BUILDKITE_PLUGIN_CREATE_GITHUB_APP_TOKEN_OUTPUT_VARIABLE_NAME

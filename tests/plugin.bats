@@ -7,6 +7,7 @@ setup() {
   mkdir -p "$TMPDIR" "$TEST_TMPDIR/bin"
   openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out "$TEST_TMPDIR/key.pem" 2>/dev/null
   export TEST_PRIVATE_KEY="$(cat "$TEST_TMPDIR/key.pem")"
+  export TEST_REAL_MKTEMP="$(command -v mktemp)"
   export PATH="$TEST_TMPDIR/bin:$PATH"
   export BUILDKITE_REPO="git@github.com:acme/widgets.git"
   export BUILDKITE_PLUGIN_CREATE_GITHUB_APP_TOKEN_CLIENT_ID="Iv1.0123456789abcdef"
@@ -45,9 +46,12 @@ create_mocks() {
 #!/usr/bin/env bash
 set -euo pipefail
 if [[ "$1 $2" == "secret get" ]]; then
+  [[ "$#" -eq 3 && "$3" == GITHUB_APP_PRIVATE_KEY ]]
   printf '%s' "$TEST_PRIVATE_KEY"
 elif [[ "$1 $2" == "redactor add" ]]; then
-  printf 'redactor:%s\n' "$3" >>"$MOCK_LOG"
+  [[ "$#" -eq 2 ]]
+  token="$(cat)"
+  printf 'redactor:%s\n' "$token" >>"$MOCK_LOG"
 else
   exit 2
 fi
@@ -56,10 +60,15 @@ MOCK
 #!/usr/bin/env bash
 set -euo pipefail
 method=GET output= payload= url=
+config= auth=
 while (($#)); do
   [[ "$1" != *Bearer* ]] || exit 9
   case "$1" in
-    --config) shift 2 ;;
+    --config)
+      [[ "$2" == - && -z "$config" ]]
+      config="$(cat)"
+      shift 2
+      ;;
     --request) method="$2"; shift 2 ;;
     --output) output="$2"; shift 2 ;;
     --data) payload="$2"; shift 2 ;;
@@ -68,6 +77,13 @@ while (($#)); do
     *) url="$1"; shift ;;
   esac
 done
+[[ "$config" =~ ^header\ =\ \"Authorization:\ Bearer\ ([^\"]+)\"$ ]]
+auth="${BASH_REMATCH[1]}"
+if [[ "$method" == DELETE ]]; then
+  [[ "$auth" == ghs_test_token ]]
+else
+  [[ "$auth" == *.*.* ]]
+fi
 printf '%s %s %s\n' "$method" "$url" "$payload" >>"$MOCK_LOG"
 if [[ "${MOCK_CURL_FAIL:-false}" == true ]]; then exit 7; fi
 if [[ "$method" == DELETE ]]; then
@@ -192,6 +208,16 @@ create_token() {
   [[ ! -e "$state" ]]
 }
 
+@test "unreadable state does not make cleanup fatal" {
+  create_token
+  state="$BUILDKITE_PLUGIN_CREATE_GITHUB_APP_TOKEN_STATE_DIR"
+  chmod 000 "$state/token"
+  run github_app_token_cleanup
+  [[ "$status" -eq 0 ]]
+  [[ "$output" == *'failed to read token state; revocation was not attempted'* ]]
+  [[ ! -e "$state" ]]
+}
+
 @test "reports sanitized installation discovery failures" {
   export MOCK_DISCOVERY_STATUS=404
   run create_token
@@ -208,6 +234,53 @@ create_token() {
   [[ "$output" == *'HTTP 500: Not Found'* ]]
   [[ "$(grep -c '/installation' "$MOCK_LOG")" -eq 1 ]]
   grep -F '/orgs/acme/installation' "$MOCK_LOG"
+}
+
+@test "fails closed when plugin configuration sorting fails" {
+  cat >"$TEST_TMPDIR/bin/sort" <<'MOCK'
+#!/usr/bin/env bash
+exit 1
+MOCK
+  chmod +x "$TEST_TMPDIR/bin/sort"
+  export BUILDKITE_PLUGIN_CREATE_GITHUB_APP_TOKEN_REPOSITORIES_0=api
+  run create_token
+  [[ "$status" -ne 0 ]]
+  [[ "$output" == *'failed to sort plugin configuration variables'* ]]
+  [[ ! -e "$MOCK_LOG" ]]
+}
+
+@test "fails when JWT claims cannot be generated" {
+  cat >"$TEST_TMPDIR/bin/jq" <<'MOCK'
+#!/usr/bin/env bash
+exit 1
+MOCK
+  chmod +x "$TEST_TMPDIR/bin/jq"
+  source "$BATS_TEST_DIRNAME/../lib/plugin.bash"
+  run plugin_create_jwt Iv1.0123456789abcdef "$TEST_PRIVATE_KEY"
+  [[ "$status" -ne 0 ]]
+  [[ "$output" == *'failed to encode JWT claims'* ]]
+  [[ -z "$(find "$TMPDIR" -type f -print -quit)" ]]
+}
+
+@test "revokes a minted token when private state cannot be written" {
+  cat >"$TEST_TMPDIR/bin/mktemp" <<'MOCK'
+#!/usr/bin/env bash
+if [[ "${1:-}" == -d ]]; then
+  state="$TMPDIR/github-app-token-state.unwritable"
+  mkdir "$state"
+  chmod 500 "$state"
+  printf '%s\n' "$state"
+else
+  exec "$TEST_REAL_MKTEMP" "$@"
+fi
+MOCK
+  chmod +x "$TEST_TMPDIR/bin/mktemp"
+  run create_token
+  [[ "$status" -ne 0 ]]
+  [[ "$output" == *'could not write private token state'* ]]
+  grep -F 'DELETE https://api.github.com/installation/token' "$MOCK_LOG"
+  [[ -z "${GITHUB_TOKEN:-}" ]]
+  [[ -z "$(find "$TMPDIR" -type f -print -quit)" ]]
 }
 
 @test "reports sanitized token API failures" {
