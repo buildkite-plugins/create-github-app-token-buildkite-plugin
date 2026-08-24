@@ -61,6 +61,8 @@ MOCK
 set -euo pipefail
 method=GET output= payload= url=
 config= auth=
+[[ "$1" == -q ]]
+shift
 while (($#)); do
   [[ "$1" != *Bearer* ]] || exit 9
   case "$1" in
@@ -155,6 +157,11 @@ create_token() {
   [[ "$BUILDKITE_PLUGIN_CREATE_GITHUB_APP_TOKEN_OUTPUT_VARIABLE_NAME" == ACME_GITHUB_TOKEN ]]
   grep -Fx 'redactor:ghs_test_token' "$MOCK_LOG"
   [[ "$(tail -1 "$MOCK_LOG")" == redactor:* ]]
+}
+
+@test "removes the referenced private key variable before the command" {
+  create_token
+  [[ -z "${TEST_PRIVATE_KEY+x}" ]]
 }
 
 @test "retrieves a private key from Buildkite Secrets" {

@@ -57,7 +57,7 @@ Configure exactly one identity source. When compatibility fields overlap, `clien
 Exactly one is required:
 
 - **`private-key-secret`**: Name of a Buildkite Secret. The hook calls `buildkite-agent secret get`.
-- **`private-key-env`**: Name of an environment variable populated by Buildkite Secrets or another secret manager.
+- **`private-key-env`**: Name of an environment variable populated by Buildkite Secrets or another secret manager. The plugin consumes and unsets this variable before the command runs.
 
 Both normal multi-line PEM and PEM containing literal `\n` separators are accepted. Temporary key files are mode `0600` under a private umask and are removed immediately after signing.
 

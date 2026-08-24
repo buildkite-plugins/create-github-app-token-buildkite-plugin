@@ -61,7 +61,7 @@ plugin_api_request() {
     args+=(--header 'Content-Type: application/json' --data "$payload")
   fi
 
-  status="$(printf 'header = "Authorization: Bearer %s"\n' "$auth" | curl --config - "${args[@]}" "${GITHUB_APP_API_URL}${path}")" || {
+  status="$(printf 'header = "Authorization: Bearer %s"\n' "$auth" | curl -q --config - "${args[@]}" "${GITHUB_APP_API_URL}${path}")" || {
     GITHUB_APP_HTTP_STATUS=unknown
     GITHUB_APP_HTTP_MESSAGE='GitHub API request failed'
     plugin_fail "GitHub API request failed for ${method} ${path}"
@@ -293,6 +293,9 @@ github_app_token_create() {
   plugin_target "$(plugin_config owner)" || return
   jwt="$(plugin_create_jwt "$client_id" "$private_key")" || return
   unset private_key
+  if [[ -n "$private_key_env" ]]; then
+    unset "$private_key_env"
+  fi
   response="$(mktemp "${TMPDIR:-/tmp}/github-app-response.XXXXXX")"
 
   installation_id="$(plugin_config installation-id)"
