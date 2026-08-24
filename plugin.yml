@@ -1,6 +1,6 @@
 name: Create GitHub App Token
 description: Creates a short-lived, least-privilege GitHub App installation access token
-author: https://github.com/buildkite
+author: https://github.com/buildkite-plugins
 requirements:
   - bash
   - buildkite-agent
