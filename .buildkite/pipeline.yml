@@ -1,0 +1,3 @@
+steps:
+  - label: ":white_check_mark: Verify pipeline retarget"
+    command: "echo 'Buildkite pipeline is connected to buildkite-plugins/create-github-app-token-buildkite-plugin'"
